@@ -111,6 +111,8 @@ h1,h2,h3{font-family:'Changa',sans-serif}
 .cbar{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px}
 .cbfill{width:100%;max-width:34px;background:linear-gradient(180deg,#1b6b76,#0e3d45);border-radius:6px 6px 2px 2px;transform-origin:bottom;animation:grow .8s cubic-bezier(.2,.8,.3,1) both}
 .cbar.today .cbfill{background:linear-gradient(180deg,#ffc247,#f2a516)}
+.cbar.prev{opacity:.5}
+.cbar.prev .cbfill{background:linear-gradient(180deg,#b5c8cc,#7d8b8f)}
 @keyframes grow{from{transform:scaleY(0)}}
 .cval{font-size:9.5px;color:#5c6b6f;font-weight:600}
 .clab{font-size:11px;color:#33454a;font-weight:600}
@@ -170,7 +172,9 @@ h1,h2,h3{font-family:'Changa',sans-serif}
 .s-meta{font-size:12.5px;color:var(--mut)}
 .s-actions{display:flex;flex-direction:column;gap:9px;margin-top:20px}
 .notif-row{display:flex;flex-direction:column;padding:9px 0;border-bottom:1px dashed #eef1f1;font-size:13px}
-
+.debt-summary{background:#f6f9f8;border-radius:11px;padding:12px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center}
+.debt-summary div b{display:block;font-family:'Changa';font-size:18px;margin-top:3px}
+.debt-summary div small{color:var(--mut);font-size:11px}
 .mov{position:fixed;inset:0;background:rgba(10,25,28,.55);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px;animation:fade .2s}
 .modal{background:#fff;border-radius:16px;width:100%;max-width:460px;max-height:88vh;overflow:auto;padding:18px;animation:pop .28s cubic-bezier(.2,1.2,.4,1)}
 .m-title{font-size:18px;display:flex;align-items:center;gap:8px;margin-bottom:8px}
@@ -186,8 +190,14 @@ h1,h2,h3{font-family:'Changa',sans-serif}
 #print-area{display:none}
 @media print{
   body>*{display:none!important}
-  #print-area{display:block!important;width:72mm;margin:0 auto;padding:2mm;font-family:'IBM Plex Sans Arabic',sans-serif;color:#000}
-  @page{size:80mm auto;margin:0}
+  #print-area{display:block!important;margin:0 auto;padding:2mm;font-family:'IBM Plex Sans Arabic',sans-serif;color:#000}
+  @page{margin:0}
+  #print-area.a4{width:210mm;min-height:297mm}
+  #print-area.a4 .rc{font-size:14px;padding:10mm}
+  #print-area.a4 .rc-name{font-size:22px}
+  #print-area.a4 .rc-tbl{font-size:13px}
+  #print-area.a4 .rc-tbl th,#print-area.a4 .rc-tbl td{padding:6px 4px}
+  #print-area.receipt{width:72mm}
 }
 .rc{font-size:12px;text-align:center}
 .rc-name{font-family:'Changa';font-weight:800;font-size:17px;margin-top:4px}
@@ -212,13 +222,14 @@ h1,h2,h3{font-family:'Changa',sans-serif}
 <div id="modal-root"></div>
 <div id="toast-root"></div>
 <div id="print-area"></div>
+<input type="file" id="importFile" class="hidden" accept=".json,application/json">
 
 <script>
 /* ================= أدوات عامة ================= */
 const el=id=>document.getElementById(id);
 const fmt=n=>Math.round(+n||0).toLocaleString('en');
 const shortNum=n=>n>=1e6?((n/1e6).toFixed(1).replace('.0','')+'M'):n>=1e3?(Math.round(n/1e3)+'K'):String(n);
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&','<':'<','>':'>','"':'"',"'":'''}[c]));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const fmtDate=iso=>{const d=new Date(iso);return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear()};
 const fmtTime=iso=>{const d=new Date(iso);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
@@ -227,34 +238,38 @@ function startOfWeek(d){const x=new Date(d);x.setHours(0,0,0,0);const diff=(x.ge
 const DAY=['أحد','إثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'];
 const MON=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 function tween(elm,val){const st=performance.now(),d=750;function f(t){const p=Math.min(1,(t-st)/d);elm.textContent=fmt(Math.round(val*(p*(2-p))));if(p<1)requestAnimationFrame(f)}requestAnimationFrame(f)}
-const remOf=s=>Math.max(0,s.total-(s.paidAmount||0));
+function logAction(action){const logs=DB.get('am_logins',[]);logs.unshift({id:uid(),date:new Date().toISOString(),userId:currentUser?currentUser.id:null,userName:currentUser?currentUser.name:'نظام',action});DB.set('am_logins',logs.slice(0,200))}
 
 /* ================= أيقونات ================= */
 const IC={
- home:'<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
- box:'<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
- chart:'<path d="M4 20v-6M9 20V8M14 20v-9M19 20V5"/><path d="M3 21h18"/>',
- wallet:'<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18"/><circle cx="16" cy="15" r="1"/>',
- undo:'<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
- users:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 15.2c2.6.4 4.7 2 5.5 4.8"/>',
- gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
- bell:'<path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
- out:'<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
- plus:'<path d="M12 5v14M5 12h14"/>',
- edit:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
- trash:'<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 15h10l1-15"/><path d="M10 11v6M14 11v6"/>',
- check:'<path d="M4 12.5l5 5L20 6.5"/>',
- x:'<path d="M6 6l12 12M18 6L6 18"/>',
- search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
- print:'<path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="7"/>',
- cart:'<circle cx="9" cy="20" r="1.6"/><circle cx="17" cy="20" r="1.6"/><path d="M3 4h2l2.6 12h10.2L21 8H7"/>',
- alert:'<path d="M12 3 2 20h20z"/><path d="M12 9v5"/><path d="M12 16.8v.2"/>',
- back:'<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
- lock:'<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
- cash:'<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/>',
+ home:'<path d="M3 10.5 12 3l9 7.5"></1><path d="M5 9.5V21h14V9.5"></path>',
+ box:'<path d="M21 8l-9-5-9 5v8l9 5 9-5z"></path><path d="M3 8l9 5 9-5"></path><path d="M12 13v8"></path>',
+ chart:'<path d="M4 20v-6M9 20V8M14 20v-9M19 20V5"></path><path d="M3 21h18"></path>',
+ wallet:'<rect x="3" y="6" width="18" height="14" rx="2"></rect><path d="M3 10h18"></path><circle cx="16" cy="15" r="1"></circle>',
+ undo:'<path d="M9 14 4 9l5-5"></path><path d="M4 9h10a6 6 0 0 1 0 12h-3"></path>',
+ users:'<circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"></path><circle cx="17" cy="9" r="2.5"></circle><path d="M16 15.2c2.6.4 4.7 2 5.5 4.8"></path>',
+ gear:'<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>',
+ bell:'<path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path>',
+ out:'<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path>',
+ plus:'<path d="M12 5v14M5 12h14"></path>',
+ edit:'<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path>',
+ trash:'<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 15h10l1-15"></path><path d="M10 11v6M14 11v6"></path>',
+ check:'<path d="M4 12.5l5 5L20 6.5"></path>',
+ x:'<path d="M6 6l12 12M18 6L6 18"></path>',
+ search:'<circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path>',
+ print:'<path d="M6 9V3h12v6"></path><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="7"></rect>',
+ cart:'<circle cx="9" cy="20" r="1.6"></circle><circle cx="17" cy="20" r="1.6"></circle><path d="M3 4h2l2.6 12h10.2L21 8H7"></path>',
+ alert:'<path d="M12 3 2 20h20z"></path><path d="M12 9v5"></path><path d="M12 16.8v.2"></path>',
+ back:'<path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path>',
+ lock:'<rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path>',
+ cash:'<rect x="2" y="6" width="20" height="12" rx="2"></rect><circle cx="12" cy="12" r="2.6"></circle>',
+ down:'<path d="M12 5v14M19 12l-7 7-7-7"></path>',
+ up:'<path d="M12 19V5M5 12l7-7 7 7"></path>',
+ cal:'<rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path>',
+ book:'<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>',
 };
 function ic(n,s=18){return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(IC[n]||'')+'</svg>'}
-function icWA(s=18){return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.5 0 1.47 1.07 2.9 1.22 3.1.15.2 2.1 3.2 5.1 4.49.71.3 1.27.49 1.7.63.72.23 1.37.2 1.88.12.57-.08 1.76-.72 2-1.42.25-.7.25-1.3.17-1.42-.07-.12-.27-.2-.57-.35M12.05 21.8h-.01a9.87 9.87 0 0 1-5.03-1.38l-.36-.21-3.74.98 1-3.65-.24-.37a9.86 9.86 0 0 1-1.51-5.26c0-5.45 4.44-9.88 9.9-9.88a9.84 9.84 0 0 1 9.88 9.9c0 5.45-4.44 9.87-9.89 9.87M20.5 3.5A11.8 11.8 0 0 0 12.05 0C5.5 0 .16 5.34.16 11.9c0 2.1.55 4.14 1.6 5.95L.05 24l6.3-1.65a11.9 11.9 0 0 0 5.7 1.45h.01c6.55 0 11.89-5.34 11.89-11.9 0-3.18-1.24-6.16-3.45-8.4"/></svg>'}
+function icWA(s=18){return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.5 0 1.47 1.07 2.9 1.22 3.1.15.2 2.1 3.2 5.1 4.49.71.3 1.27.49 1.7.63.72.23 1.37.2 1.88.12.57-.08 1.76-.72 2-1.42.25-.7.25-1.3.17-1.42-.07-.12-.27-.2-.57-.35M12.05 21.8h-.01a9.87 9.87 0 0 1-5.03-1.38l-.36-.21-3.74.98 1-3.65-.24-.37a9.86 9.86 0 0 1-1.51-5.26c0-5.45 4.44-9.88 9.9-9.88a9.84 9.84 0 0 1 9.88 9.9c0 5.45-4.44 9.87-9.89 9.87M20.5 3.5A11.8 11.8 0 0 0 12.05 0C5.5 0 .16 5.34.16 11.9c0 2.1.55 4.14 1.6 5.95L.05 24l6.3-1.65a11.9 11.9 0 0 0 5.7 1.45h.01c6.55 0 11.89-5.34 11.89-11.9 0-3.18-1.24-6.16-3.45-8.4"></path></svg>'}
 
 /* ================= قاعدة البيانات (ذاكرة الهاتف) ================= */
 const DB={
@@ -263,9 +278,9 @@ const DB={
 };
 
 function seed(){
- if(DB.get('am_seeded_v1'))return;
+ if(DB.get('am_seeded_v2'))return;
  const P=[['زيت محرك 1 جالون',6,45000,7000],['فلتر زيت',20,8000,2000],['فلتر هواء',15,9500,2500],['بوجيه',40,6000,1500],['تيل فرامل أمامي',12,18000,4500],['فحمات فرامل خلفية',10,15000,3500],['سير مروحة',14,12000,3000],['سير دينمو',9,14000,3500],['طرمبة ماء',5,55000,12000],['مروحة رديتر',7,38000,9000],['رادياتير كامل',3,95000,20000],['بطارية 70 أمبير',8,185000,25000],['كلاتش كامل',4,85000,15000],['مساعدين أماميين',6,65000,12000],['جنزير توزيع',11,28000,6000],['لمبة أمامية LED',25,10000,3000],['غطاء تانكي وقود',5,12000,3000],['مرآة جانبية',16,9000,2500],['صمام عادم (بلف)',30,7000,1800],['قربة رديتر',4,16000,4000]];
- const prods=P.map((r,i)=>({id:'p'+(i+1),name:r[0],stock:r[1],buy:r[2],profit:r[3],sell:r[2]+r[3]}));
+ const prods=P.map((r,i)=>({id:'p'+(i+1),name:r[0],stock:r[1],buy:r[2],profit:r[3],sell:r[2]+r[3],minStock:5}));
  const users=[
   {id:'u1',name:'أبو مصطفى',username:'admin',password:'1234',role:'admin'},
   {id:'u2',name:'محمد أحمد',username:'mohamed',password:'1234',role:'seller'},
@@ -277,9 +292,11 @@ function seed(){
   const d=new Date();d.setDate(d.getDate()-ago);d.setHours(h,(seq*11)%60,0,0);
   sales.push({id:'s'+seq,inv:'INV-'+String(seq).padStart(3,'0'),date:d.toISOString(),sellerId:o.seller.id,sellerName:o.seller.name,
    items,subtotal:sub,discount:o.disc||0,total:sub-(o.disc||0),payType:o.debt?'debt':'cash',
-   debtorName:o.debtor||'',debtorPhone:o.phone||'',custPhone:'',debtStatus:o.debt?(o.paid?'paid':'unpaid'):'',
-   paidAmount:o.paid?(sub-(o.disc||0)):0,
-   paidDate:o.paid?d.toISOString():'',locked:!!o.paid,returned:[]});};
+   debtorName:o.debtor||'',debtorPhone:o.phone||'',custPhone:'',
+   paidAmount:o.paid||0,
+   debtStatus:o.debt?(o.paid>=sub-(o.disc||0)?'paid':'unpaid'):'',
+   paidDate:(o.paid&&o.paid>=sub-(o.disc||0))?d.toISOString():'',
+   locked:!!(o.paid&&o.paid>=sub-(o.disc||0)),returned:[]});};
  const A=users[1],B=users[2];
  mk(0,10,[[0,1],[1,2]],{seller:A});
  mk(0,12,[[15,2],[18,1]],{seller:B});
@@ -289,21 +306,22 @@ function seed(){
  mk(2,12,[[7,2]],{seller:B});
  mk(3,13,[[4,1],[2,1]],{seller:A,debt:1,debtor:'السر محمد نور',phone:'0123456789'});
  mk(4,10,[[13,1]],{seller:B});
- mk(6,15,[[0,2],[9,1]],{seller:A,debt:1,paid:1,debtor:'ود النور للترحيلات'});
+ mk(6,15,[[0,2],[9,1]],{seller:A,debt:1,paid:100000,debtor:'ود النور للترحيلات'});
  mk(9,12,[[6,1],[17,2]],{seller:B});
  mk(16,11,[[14,1]],{seller:A});
  mk(34,12,[[10,1]],{seller:B});
  const returns=[{id:'r1',date:new Date(Date.now()-2*864e5).toISOString(),inv:'INV-004',invId:'s4',pid:prods[5].id,name:prods[5].name,qty:1,amount:prods[5].sell,cost:prods[5].buy,reason:'مقاس غير مناسب',sellerId:'u2',sellerName:'عبد الله إبراهيم'}];
  DB.set('am_products',prods);DB.set('am_users',users);
  DB.set('am_settings',{shopName:'اسبيرات أبو مصطفى',phone:'0912345678',whatsapp:'249912345678'});
- DB.set('am_sales',sales);DB.set('am_returns',returns);DB.set('am_payments',[]);
- DB.set('am_seq',seq);DB.set('am_notifs',[]);DB.set('am_seeded_v1',1);
+ DB.set('am_sales',sales);DB.set('am_returns',returns);DB.set('am_payments',[]);DB.set('am_debt_payments',[]);
+ DB.set('am_seq',seq);DB.set('am_notifs',[]);DB.set('am_logins',[]);DB.set('am_day_closures',[]);DB.set('am_seeded_v2',1);
 }
 const nextInvNo=()=>'INV-'+String(DB.get('am_seq',0)+1).padStart(3,'0');
 
 /* ================= الجلسة والدخول ================= */
 let currentUser=null,currentView='',cart={},posSearch='',invItems=[],invPay='cash';
 let repF={from:'',to:'',seller:'all',type:'all'},retInvId=null,retPicks={},retReason='';
+let invDiscMode='fixed';
 
 function renderLogin(){
  el('screen-login').innerHTML=
@@ -337,19 +355,20 @@ function doLogin(role){
  const roleName=(role==='adm')?'admin':'seller';
  const u=el(role+'-user').value.trim(),p=el(role+'-pass').value;
  let users=DB.get('am_users',[]);
- if(!users.length){localStorage.removeItem('am_seeded_v1');seed();users=DB.get('am_users',[]);}
+ if(!users.length){localStorage.removeItem('am_seeded_v1');localStorage.removeItem('am_seeded_v2');seed();users=DB.get('am_users',[]);}
  const m=users.find(x=>x.role===roleName&&x.username===u&&x.password===p);
  if(!m){const c=el('loginCard');c.classList.remove('shake');void c.offsetWidth;c.classList.add('shake');toast('بيانات الدخول غير صحيحة','warn');return}
+ logAction('login');
  enterApp(m);
 }
-function logout(){currentUser=null;DB.set('am_session',null);el('screen-app').classList.add('hidden');el('screen-login').style.display='';renderLogin();window.scrollTo(0,0)}
+function logout(){if(currentUser)logAction('logout');currentUser=null;DB.set('am_session',null);el('screen-app').classList.add('hidden');el('screen-login').style.display='';renderLogin();window.scrollTo(0,0)}
 
 /* ================= الهيكل العام ================= */
 const NAV={
- admin:[['dashboard','الرئيسية','home'],['products','المنتجات','box'],['reports','التقارير','chart'],['debts','الديون','wallet'],['returns','المرتجعات','undo'],['users','الحسابات','users']],
+ admin:[['dashboard','الرئيسية','home'],['products','المنتجات','box'],['reports','التقارير','chart'],['debts','الديون','wallet'],['returns','المرتجعات','undo'],['users','الحسابات','users'],['settings','الإعدادات','gear']],
  seller:[['pos','البيع','cart'],['debts','الديون','wallet'],['sreturns','المرتجع','undo'],['mysales','مبيعاتي','chart']]
 };
-const ROUTE={dashboard:viewDashboard,products:viewProducts,reports:viewReports,debts:viewDebts,returns:viewReturns,users:viewUsers,settings:viewSettings,pos:viewPOS,invoice:viewInvoice,sreturns:viewSReturns,mysales:viewMySales};
+const ROUTE={dashboard:viewDashboard,products:viewProducts,reports:viewReports,debts:viewDebts,returns:viewReturns,users:viewUsers,settings:viewSettings,pos:viewPOS,invoice:viewInvoice,sreturns:viewSReturns,mysales:viewMySales,closing:viewClosing,loginLogs:viewLoginLogs};
 function enterApp(u){
  currentUser=u;DB.set('am_session',{uid:u.id});cart={};
  el('screen-login').style.display='none';el('screen-app').classList.remove('hidden');
@@ -372,9 +391,14 @@ const renderCurrent=()=>{if(ROUTE[currentView])ROUTE[currentView]()};
 function emptyState(icn,txt){return '<div class="empty">'+ic(icn,30)+'<span>'+txt+'</span></div>'}
 function payBadge(s){
  if(s.payType==='cash')return '<span class="bdg ok">كاش</span>';
- if(s.debtStatus==='paid')return '<span class="bdg info">دين مدفوع</span>';
- if((s.paidAmount||0)>0)return '<span class="bdg warn">جزئي ('+fmt(s.paidAmount)+')</span>';
+ const paid=s.paidAmount||0,rem=s.total-paid;
+ if(rem<=0||s.debtStatus==='paid')return '<span class="bdg info">دين مدفوع</span>';
+ if(paid>0)return '<span class="bdg warn">جزئي ('+fmt(rem)+' متبقي)</span>';
  return '<span class="bdg bad">دين غير مدفوع</span>';
+}
+function getDebtRemaining(s){
+ if(s.payType!=='debt')return 0;
+ return Math.max(0,s.total-(s.paidAmount||0));
 }
 
 /* ================= مودال وتوست ================= */
@@ -390,7 +414,7 @@ function toast(msg,type){
 /* ================= التنبيهات ================= */
 function ensureLowNotifs(){
  const prods=DB.get('am_products',[]);let notifs=DB.get('am_notifs',[]);let changed=false;
- prods.filter(p=>p.stock<=5).forEach(p=>{
+ prods.filter(p=>p.stock<=(p.minStock||5)).forEach(p=>{
   const ex=notifs.find(n=>n.tag==='stock-'+p.id);
   if(!ex||Date.now()-ex.ts>12*3600*1000){
    notifs.unshift({id:uid(),tag:'stock-'+p.id,ts:Date.now(),date:new Date().toISOString(),text:'انخفاض المخزون: «'+p.name+'» — المتبقي '+p.stock+' قطعة'});changed=true}});
@@ -398,14 +422,17 @@ function ensureLowNotifs(){
  updateBell();
 }
 function updateBell(){
- const low=DB.get('am_products',[]).filter(p=>p.stock<=5).length;
+ const prods=DB.get('am_products',[]);
+ const low=prods.filter(p=>p.stock<=(p.minStock||5)).length;
  const b=el('bellBadge');if(!b)return;
  b.textContent=low;b.classList.toggle('hidden',!low);
 }
 function openNotifs(){
- const notifs=DB.get('am_notifs',[]),low=DB.get('am_products',[]).filter(p=>p.stock<=5);
+ const notifs=DB.get('am_notifs',[]);
+ const prods=DB.get('am_products',[]);
+ const low=prods.filter(p=>p.stock<=(p.minStock||5));
  modal('<h3 class="m-title">'+ic('bell',19)+' التنبيهات</h3>'+
- (low.length?'<div class="lbl" style="margin-top:6px">مخزون منخفض (≤ 5 قطع)</div>'+low.map(p=>'<div class="tr-line"><span>'+esc(p.name)+'</span><span class="bdg bad">'+p.stock+' متبقي</span></div>').join(''):'<p class="mut" style="font-size:13px">لا تنبيهات مخزون ✓</p>')+
+ (low.length?'<div class="lbl" style="margin-top:6px">مخزون منخفض</div>'+low.map(p=>'<div class="tr-line"><span>'+esc(p.name)+'</span><span class="bdg bad">'+p.stock+' متبقي (الحد: '+(p.minStock||5)+')</span></div>').join(''):'<p class="mut" style="font-size:13px">لا تنبيهات مخزون ✓</p>')+
  (notifs.length?'<div class="lbl">سجل التنبيهات</div>'+notifs.slice(0,15).map(n=>'<div class="notif-row"><span>'+esc(n.text)+'</span><small class="mut">'+fmtDate(n.date)+' • '+fmtTime(n.date)+'</small></div>').join(''):''));
 }
 
@@ -417,37 +444,55 @@ function viewDashboard(){
  const tR=rets.filter(r=>isSameDay(new Date(r.date),now));
  const netToday=tS.reduce((s,x)=>s+x.total,0)-tR.reduce((s,x)=>s+x.amount,0);
  const profToday=tS.reduce((s,x)=>s+x.items.reduce((a,i)=>a+(i.price-i.cost)*i.qty,0),0)-tR.reduce((s,x)=>s+(x.cost||0)*x.qty,0);
- const unpaid=sales.filter(s=>s.payType==='debt'&&s.debtStatus==='unpaid');
- const unpaidTotal=unpaid.reduce((s,x)=>s+remOf(x),0);
- const low=prods.filter(p=>p.stock<=5);
+ const unpaid=sales.filter(s=>s.payType==='debt'&&getDebtRemaining(s)>0);
+ const low=prods.filter(p=>p.stock<=(p.minStock||5));
+ 
+ // مقارنة الأسبوع الحالي مع السابق
+ const thisWeekStart=startOfWeek(now);
+ const prevWeekStart=new Date(thisWeekStart);prevWeekStart.setDate(prevWeekStart.getDate()-7);
+ const thisWeekSales=sales.filter(s=>{const d=new Date(s.date);return d>=thisWeekStart&&d<=now}).reduce((s,x)=>s+x.total,0);
+ const prevWeekSales=sales.filter(s=>{const d=new Date(s.date);return d>=prevWeekStart&&d<thisWeekStart}).reduce((s,x)=>s+x.total,0);
+ const weekDiff=thisWeekSales-prevWeekSales;
+ const weekDiffPct=prevWeekSales>0?Math.round((weekDiff/prevWeekSales)*100):0;
+ 
  const days=[];for(let i=6;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i);
-  days.push({label:DAY[d.getDay()],value:sales.filter(s=>isSameDay(new Date(s.date),d)).reduce((s,x)=>s+x.total,0),mark:i===0})}
+  const prev=new Date(d);prev.setDate(prev.getDate()-7);
+  days.push({label:DAY[d.getDay()],value:sales.filter(s=>isSameDay(new Date(s.date),d)).reduce((s,x)=>s+x.total,0),
+   prevValue:sales.filter(s=>isSameDay(new Date(s.date),prev)).reduce((s,x)=>s+x.total,0),mark:i===0})}
  const months=[];for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);
   months.push({label:MON[d.getMonth()],value:sales.filter(s=>{const x=new Date(s.date);return x.getFullYear()===d.getFullYear()&&x.getMonth()===d.getMonth()}).reduce((s,x)=>s+x.total,0)})}
  const agg={};sales.forEach(s=>s.items.forEach(i=>{agg[i.name]=(agg[i.name]||0)+i.qty}));
  rets.forEach(r=>{agg[r.name]=Math.max(0,(agg[r.name]||0)-r.qty)});
  const top=Object.entries(agg).sort((a,b)=>b[1]-a[1]).slice(0,5),maxQ=top.length?top[0][1]:1;
  const feed=sales.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8);
+ const diffIcon=weekDiff>=0?ic('up',14):ic('down',14);
+ const diffColor=weekDiff>=0?'#177a44':'#bb3a22';
  el('main').innerHTML=
  '<div class="page-h"><h2>لوحة التحكم</h2><span class="live-dot"></span><span class="live-txt">مزامنة لحظية</span></div>'+
  '<div class="kpis">'+
  '<div class="kpi k-a"><span class="k-lbl">مبيعات اليوم (صافي)</span><span class="num tw" data-v="'+netToday+'">0</span><small>ج.س • '+tS.length+' فاتورة</small></div>'+
  '<div class="kpi k-ok"><span class="k-lbl">أرباح اليوم</span><span class="num tw" data-v="'+profToday+'">0</span><small>ج.س</small></div>'+
- '<div class="kpi k-bad" onclick="go(\'debts\')" style="cursor:pointer"><span class="k-lbl">ديون متبقية</span><span class="num tw" data-v="'+unpaidTotal+'">0</span><small>'+unpaid.length+' فاتورة غير مسددة</small></div>'+
- '<div class="kpi k-warn"><span class="k-lbl">تنبيهات مخزون</span><span class="num">'+low.length+'</span><small>'+(low.length?'منتجات ≤ 5 قطع':'المخزون سليم ✓')+'</small></div></div>'+
+ '<div class="kpi k-bad" onclick="go(\'debts\')" style="cursor:pointer"><span class="k-lbl">ديون متبقية</span><span class="num tw" data-v="'+unpaid.reduce((s,x)=>s+getDebtRemaining(x),0)+'">0</span><small>'+unpaid.length+' فاتورة</small></div>'+
+ '<div class="kpi k-warn"><span class="k-lbl">تنبيهات مخزون</span><span class="num">'+low.length+'</span><small>'+(low.length?'منتجات تحت الحد الأدنى':'المخزون سليم ✓')+'</small></div></div>'+
+ '<div class="card pad" style="margin-top:12px;background:linear-gradient(135deg,#fff8ea,#fff);border-color:#f4d9a6"><div class="c-title">'+ic('chart',16)+' مقارنة الأسبوع الحالي بالسابق</div>'+
+ '<div class="tr-line"><span>هذا الأسبوع</span><b>'+fmt(thisWeekSales)+' ج.س</b></div>'+
+ '<div class="tr-line"><span>الأسبوع الماضي</span><b class="mut">'+fmt(prevWeekSales)+' ج.س</b></div>'+
+ '<div class="tr-line big" style="color:'+diffColor+'"><span>الفرق</span><b>'+diffIcon+' '+fmt(Math.abs(weekDiff))+' ('+(weekDiffPct>=0?'+':'')+weekDiffPct+'%)</b></div></div>'+
  (low.length?'<div class="alert-strip" onclick="openNotifs()">'+ic('alert',17)+'<span>مخزون منخفض: '+low.map(p=>esc(p.name)+' ('+p.stock+')').join('، ')+'</span></div>':'')+
- '<div class="charts"><div class="card pad"><div class="c-title">'+ic('chart',16)+' مبيعات آخر 7 أيام</div><div class="chart" id="chD"></div></div>'+
- '<div class="card pad"><div class="c-title">'+ic('chart',16)+' مبيعات آخر 6 أشهر</div><div class="chart" id="chM"></div></div></div>'+
+ '<div class="charts"><div class="card pad"><div class="c-title">'+ic('chart',16)+' آخر 7 أيام (مقارنة)</div><div class="chart" id="chD"></div></div>'+
+ '<div class="card pad"><div class="c-title">'+ic('chart',16)+' آخر 6 أشهر</div><div class="chart" id="chM"></div></div></div>'+
  '<div class="bottom"><div class="card pad"><div class="c-title">الأكثر مبيعًا</div>'+
  (top.length?top.map((t,i)=>'<div class="top-row"><span class="top-rank">'+(i+1)+'</span><div class="top-info"><b>'+esc(t[0])+'</b><div class="top-bar"><i style="width:'+Math.max(8,t[1]/maxQ*100)+'%"></i></div></div><span class="top-q">'+t[1]+'</span></div>').join(''):emptyState('box','لا مبيعات بعد'))+'</div>'+
  '<div class="card pad"><div class="c-title">آخر المبيعات اللحظية</div>'+
  (feed.length?feed.map(s=>'<div class="feed-row"><div><b style="font-family:Changa">'+s.inv+'</b><small class="mut">'+fmtTime(s.date)+' • '+esc(s.sellerName)+'</small></div><div class="feed-x">'+payBadge(s)+'<b>'+fmt(s.total)+'</b></div></div>').join(''):emptyState('cart','لا مبيعات بعد'))+'</div></div>';
- drawBars(el('chD'),days);drawBars(el('chM'),months);
+ drawBars(el('chD'),days,true);drawBars(el('chM'),months);
  el('main').querySelectorAll('.tw').forEach(n=>tween(n,+n.dataset.v));
 }
-function drawBars(box,data){
- const max=Math.max(...data.map(d=>d.value),1);
- box.innerHTML=data.map(d=>'<div class="cbar'+(d.mark?' today':'')+'"><span class="cval">'+shortNum(d.value)+'</span><i class="cbfill" style="height:'+Math.max(3,d.value/max*78)+'%"></i><span class="clab">'+d.label+'</span></div>').join('');
+function drawBars(box,data,compare=false){
+ const max=Math.max(...data.flatMap(d=>compare?[d.value,d.prevValue||0]:[d.value]),1);
+ box.innerHTML=data.map(d=>{
+  if(compare){return '<div class="cbar" style="flex-direction:row;align-items:flex-end;gap:3px"><div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;justify-content:flex-end;height:100%"><span class="cval">'+shortNum(d.prevValue||0)+'</span><i class="cbfill prev" style="height:'+Math.max(3,(d.prevValue||0)/max*78)+'%"></i></div><div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;justify-content:flex-end;height:100%"><span class="cval">'+shortNum(d.value)+'</span><i class="cbfill'+(d.mark?' today':'')+'" style="height:'+Math.max(3,d.value/max*78)+'%"></i></div><span class="clab" style="grid-column:1/-1">'+d.label+'</span></div>';}
+  return '<div class="cbar'+(d.mark?' today':'')+'"><span class="cval">'+shortNum(d.value)+'</span><i class="cbfill" style="height:'+Math.max(3,d.value/max*78)+'%"></i><span class="clab">'+d.label+'</span></div>'}).join('');
 }
 
 /* ================= المنتجات ================= */
@@ -462,17 +507,23 @@ function viewProducts(){
 function renderProdList(){
  const q=(el('pSearch')?el('pSearch').value:'').trim();
  const prods=DB.get('am_products',[]).filter(p=>!q||p.name.includes(q));
- el('prodList').innerHTML=prods.length?'<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>المنتج</th><th>سعر البيع</th><th>الشراء</th><th>الربح</th><th>المخزون</th><th></th></tr></thead><tbody>'+
+ el('prodList').innerHTML=prods.length?'<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>المنتج</th><th>البيع</th><th>الشراء</th><th>الربح</th><th>المخزون</th><th>الحد الأدنى</th><th></th></tr></thead><tbody>'+
  prods.map(p=>'<tr><td><b>'+esc(p.name)+'</b></td><td><b class="txt-p">'+fmt(p.sell)+'</b></td><td class="mut">'+fmt(p.buy)+'</td><td class="mut">+'+fmt(p.profit)+'</td>'+
- '<td><span class="bdg '+(p.stock<=5?'bad':p.stock<=10?'warn':'ok')+'">'+p.stock+' قطعة</span></td>'+
+ '<td><span class="bdg '+(p.stock<=(p.minStock||5)?'bad':p.stock<=(p.minStock||5)*2?'warn':'ok')+'">'+p.stock+' قطعة</span></td>'+
+ '<td><input type="number" class="inp" style="padding:6px;font-size:12px;width:70px" value="'+(p.minStock||5)+'" min="0" onchange="updMinStock(\''+p.id+'\',this.value)"></td>'+
  '<td class="row-a"><button class="icobtn" onclick="prodModal(\''+p.id+'\')">'+ic('edit',16)+'</button><button class="icobtn danger" onclick="delProd(\''+p.id+'\')">'+ic('trash',16)+'</button></td></tr>').join('')+
  '</tbody></table></div></div>':emptyState('box','لا توجد منتجات مطابقة');
+}
+function updMinStock(id,v){
+ const prods=DB.get('am_products',[]),p=prods.find(x=>x.id===id);if(!p)return;
+ p.minStock=Math.max(0,+(v||0));DB.set('am_products',prods);ensureLowNotifs();toast('تم تحديث الحد الأدنى','ok');
 }
 function prodModal(id){
  const p=id?DB.get('am_products',[]).find(x=>x.id===id):null;
  modal('<h3 class="m-title">'+ic('box',19)+(p?' تعديل المنتج':' إضافة منتج جديد')+'</h3>'+
  '<label class="lbl">اسم المنتج</label><input class="inp" id="pm-name" value="'+(p?esc(p.name):'')+'">'+
- '<label class="lbl">كمية الكرتونة (عدد القطع بالمخزون)</label><input type="number" class="inp" id="pm-stock" value="'+(p?p.stock:0)+'" min="0">'+
+ '<div class="g2"><div><label class="lbl">المخزون (قطع)</label><input type="number" class="inp" id="pm-stock" value="'+(p?p.stock:0)+'" min="0"></div>'+
+ '<div><label class="lbl">الحد الأدنى</label><input type="number" class="inp" id="pm-min" value="'+(p?(p.minStock||5):5)+'" min="0"></div></div>'+
  '<div class="g2"><div><label class="lbl">سعر الشراء (ج.س)</label><input type="number" class="inp" id="pm-buy" value="'+(p?p.buy:0)+'" oninput="pmCalc(\'buy\')"></div>'+
  '<div><label class="lbl">الربح (ج.س)</label><input type="number" class="inp" id="pm-pr" value="'+(p?p.profit:0)+'" oninput="pmCalc(\'pr\')"></div></div>'+
  '<label class="lbl">سعر البيع النهائي (يُحسب تلقائيًا)</label><input type="number" class="inp calc" id="pm-sell" value="'+(p?p.sell:0)+'" oninput="pmCalc(\'sell\')">'+
@@ -484,7 +535,7 @@ function pmCalc(src){
 }
 function saveProd(id){
  const name=el('pm-name').value.trim();if(!name){toast('اكتب اسم المنتج','warn');return}
- const data={name,stock:+(el('pm-stock').value||0),buy:+(el('pm-buy').value||0),profit:+(el('pm-pr').value||0),sell:+(el('pm-sell').value||0)};
+ const data={name,stock:+(el('pm-stock').value||0),buy:+(el('pm-buy').value||0),profit:+(el('pm-pr').value||0),sell:+(el('pm-sell').value||0),minStock:+(el('pm-min').value||5)};
  const prods=DB.get('am_products',[]);
  if(id){Object.assign(prods.find(x=>x.id===id),data)}else prods.push(Object.assign({id:uid()},data));
  DB.set('am_products',prods);closeModal();toast(id?'تم تعديل المنتج ✓':'تمت إضافة المنتج ✓','ok');ensureLowNotifs();renderCurrent();
@@ -514,12 +565,12 @@ function runReport(){
   if(repF.to&&s.date.slice(0,10)>repF.to)return false;
   if(repF.seller!=='all'&&s.sellerId!==repF.seller)return false;
   if(repF.type==='cash'&&s.payType!=='cash')return false;
-  if(repF.type==='paid'&&!(s.payType==='debt'&&s.debtStatus==='paid'))return false;
-  if(repF.type==='unpaid'&&!(s.payType==='debt'&&s.debtStatus==='unpaid'))return false;
+  if(repF.type==='paid'&&!(s.payType==='debt'&&(s.paidAmount||0)>=s.total))return false;
+  if(repF.type==='unpaid'&&!(s.payType==='debt'&&getDebtRemaining(s)>0))return false;
   return true});
  const total=list.reduce((s,x)=>s+x.total,0),disc=list.reduce((s,x)=>s+x.discount,0);
  const profit=list.reduce((s,x)=>s+x.items.reduce((a,i)=>a+(i.price-i.cost)*i.qty,0),0);
- const cnt={cash:0,paid:0,unpaid:0};list.forEach(s=>{s.payType==='cash'?cnt.cash++:(s.debtStatus==='paid'?cnt.paid++:cnt.unpaid++)});
+ const cnt={cash:0,paid:0,unpaid:0};list.forEach(s=>{s.payType==='cash'?cnt.cash++:(getDebtRemaining(s)<=0?cnt.paid++:cnt.unpaid++)});
  el('repOut').innerHTML='<div class="kpis">'+
  '<div class="kpi k-p"><span class="k-lbl">إجمالي المبيعات</span><span class="num">'+fmt(total)+'</span><small>ج.س</small></div>'+
  '<div class="kpi k-ok"><span class="k-lbl">الأرباح</span><span class="num">'+fmt(profit)+'</span><small>ج.س</small></div>'+
@@ -529,70 +580,65 @@ function runReport(){
  '</tbody></table></div>':emptyState('chart','لا توجد نتائج مطابقة للفلاتر'))+'</div>';
 }
 
-/* ================= الديون — مع السداد الجزئي ================= */
+/* ================= الديون (النظام الجديد - دفع جزئي) ================= */
 function viewDebts(){
  const all=DB.get('am_sales',[]).filter(s=>s.payType==='debt').sort((a,b)=>b.date.localeCompare(a.date));
- const unpaid=all.filter(s=>s.debtStatus==='unpaid');
- const unTotal=unpaid.reduce((s,x)=>s+remOf(x),0);
- const collected=DB.get('am_payments',[]).reduce((s,x)=>s+x.amount,0);
- const cust={};unpaid.forEach(s=>{cust[s.debtorName]=(cust[s.debtorName]||0)+remOf(s)});
+ const remaining=all.filter(s=>getDebtRemaining(s)>0);
+ const paidAll=all.filter(s=>getDebtRemaining(s)<=0);
+ const remTotal=remaining.reduce((s,x)=>s+getDebtRemaining(x),0);
+ const paidTotal=paidAll.reduce((s,x)=>s+x.total,0);
+ const cust={};remaining.forEach(s=>{cust[s.debtorName]=(cust[s.debtorName]||0)+getDebtRemaining(s)});
  el('main').innerHTML='<div class="page-h"><h2>الديون والتحصيل</h2></div>'+
- '<div class="kpis"><div class="kpi k-bad"><span class="k-lbl">إجمالي الديون المتبقية</span><span class="num">'+fmt(unTotal)+'</span><small>ج.س • '+unpaid.length+' فاتورة</small></div>'+
- '<div class="kpi k-ok"><span class="k-lbl">إجمالي المحصّل</span><span class="num">'+fmt(collected)+'</span><small>ج.س (كل الدفعات)</small></div></div>'+
- (Object.keys(cust).length?'<div class="card pad" style="margin-top:12px"><div class="c-title">'+ic('users',16)+' الديون المتبقية حسب العميل</div>'+Object.entries(cust).map(c=>'<div class="tr-line"><span>'+esc(c[0])+'</span><b class="txt-d">'+fmt(c[1])+' ج.س</b></div>').join('')+'</div>':'')+
+ '<div class="kpis"><div class="kpi k-bad"><span class="k-lbl">إجمالي الديون المتبقية</span><span class="num">'+fmt(remTotal)+'</span><small>ج.س • '+remaining.length+' فاتورة</small></div>'+
+ '<div class="kpi k-ok"><span class="k-lbl">ديون محصّلة بالكامل</span><span class="num">'+fmt(paidTotal)+'</span><small>ج.س • '+paidAll.length+' فاتورة</small></div></div>'+
+ (Object.keys(cust).length?'<div class="card pad" style="margin-top:12px"><div class="c-title">'+ic('users',16)+' الديون حسب العميل</div>'+Object.entries(cust).map(c=>'<div class="tr-line"><span>'+esc(c[0])+'</span><b class="txt-d">'+fmt(c[1])+' ج.س</b></div>').join('')+'</div>':'')+
  '<div class="card" style="margin-top:12px">'+(all.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>الفاتورة</th><th>المدين</th><th>التاريخ</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th><th></th></tr></thead><tbody>'+
- all.map(s=>{
-  const pd=s.debtStatus==='paid'?s.total:(s.paidAmount||0);
-  const rem=remOf(s);
+ all.map(s=>{const rem=getDebtRemaining(s);const paid=s.paidAmount||0;
   return '<tr><td style="font-family:Changa;font-weight:600">'+s.inv+'</td>'+
   '<td><b>'+esc(s.debtorName)+'</b>'+(s.debtorPhone?'<br><small class="mut" dir="ltr">'+esc(s.debtorPhone)+'</small>':'')+'</td>'+
-  '<td>'+fmtDate(s.date)+'</td><td>'+fmt(s.total)+'</td>'+
-  '<td class="txt-p">'+fmt(pd)+'</td>'+
-  '<td>'+(rem>0?'<b class="txt-d">'+fmt(rem)+'</b>':'<span class="mut">0</span>')+'</td>'+
-  '<td>'+(s.debtStatus==='paid'?'<span class="bdg ok">'+ic('lock',11)+' مدفوع</span>':(pd>0?'<span class="bdg warn">مدفوع جزئيًا</span>':'<span class="bdg bad">غير مدفوع</span>'))+'</td>'+
-  '<td class="row-a">'+(s.debtStatus==='unpaid'?'<button class="btn btn-sm btn-a" onclick="payDebt(\''+s.id+'\')">سداد</button>':'')+
+  '<td>'+fmtDate(s.date)+'</td><td><b>'+fmt(s.total)+'</b></td>'+
+  '<td class="txt-p">'+fmt(paid)+'</td>'+
+  '<td class="txt-d"><b>'+fmt(rem)+'</b></td>'+
+  '<td>'+payBadge(s)+'</td>'+
+  '<td class="row-a">'+(rem>0?'<button class="btn btn-sm btn-a" onclick="payDebt(\''+s.id+'\')">دفعة</button><button class="btn btn-sm btn-p" onclick="payFull(\''+s.id+'\')">سداد كامل</button>':'<span class="bdg info">'+ic('lock',11)+' مقفل</span>')+
   (s.debtorPhone?'<button class="icobtn wa" onclick="waDebt(\''+s.id+'\')" title="تذكير واتساب">'+icWA(15)+'</button>':'')+'</td></tr>'}).join('')+
  '</tbody></table></div>':emptyState('wallet','لا توجد فواتير دين'))+'</div>';
 }
 function waDebt(id){
  const s=DB.get('am_sales',[]).find(x=>x.id===id),st=DB.get('am_settings',{});
+ const rem=getDebtRemaining(s);
  let p=(s.debtorPhone||'').replace(/\D/g,'');if(p.startsWith('0'))p='249'+p.slice(1);
- const msg='تذكير من '+st.shopName+': المتبقي عليكم '+fmt(remOf(s))+' SDG من فاتورة '+s.inv+' (الإجمالي '+fmt(s.total)+' SDG). شكرًا لتعاونكم.';
+ const msg='تذكير من '+st.shopName+': عليكم مبلغ '+fmt(rem)+' SDG (من أصل '+fmt(s.total)+') — فاتورة '+s.inv+' بتاريخ '+fmtDate(s.date)+'. شكرًا لتعاونكم.';
  window.open('https://wa.me/'+p+'?text='+encodeURIComponent(msg),'_blank');
 }
 function payDebt(id){
  const s=DB.get('am_sales',[]).find(x=>x.id===id);
- const paid=s.debtStatus==='paid'?s.total:(s.paidAmount||0);
- const rem=remOf(s);
- const hist=DB.get('am_payments',[]).filter(p=>p.invId===s.id).sort((a,b)=>b.date.localeCompare(a.date));
- modal('<h3 class="m-title">'+ic('wallet',19)+' تسجيل سداد الدين</h3>'+
+ const rem=getDebtRemaining(s);
+ modal('<h3 class="m-title">'+ic('wallet',19)+' تسجيل دفعة</h3>'+
  '<p class="mut" style="font-size:13px">الفاتورة '+s.inv+' — '+esc(s.debtorName)+'</p>'+
- '<div class="tr-line"><span>إجمالي الدين</span><b>'+fmt(s.total)+' ج.س</b></div>'+
- '<div class="tr-line"><span>المسدد سابقًا</span><b class="txt-p">'+fmt(paid)+' ج.س</b></div>'+
- '<div class="tr-line big"><span>المتبقي</span><b class="txt-d">'+fmt(rem)+' ج.س</b></div>'+
- (hist.length?'<div class="lbl">سجل الدفعات السابقة</div>'+hist.map(h=>'<div class="tr-line"><span>'+fmtDate(h.date)+' '+fmtTime(h.date)+'</span><b>'+fmt(h.amount)+' ج.س</b></div>').join(''):'')+
- '<label class="lbl">المبلغ المدفوع الآن (ج.س) — يمكن دفع جزء أو الكل</label>'+
- '<input type="number" class="inp" id="payAmt" value="'+rem+'">'+
- '<div class="m-actions"><button class="btn btn-g" onclick="closeModal()">إلغاء</button><button class="btn btn-a" onclick="doPay(\''+s.id+'\')">'+ic('check',16)+' تأكيد السداد</button></div>');
+ '<div class="debt-summary"><div><small>الإجمالي</small><b>'+fmt(s.total)+'</b></div><div><small>المدفوع</small><b class="txt-p">'+fmt(s.paidAmount||0)+'</b></div><div><small>المتبقي</small><b class="txt-d">'+fmt(rem)+'</b></div></div>'+
+ '<label class="lbl">مبلغ الدفعة (ج.س) — بحد أقصى '+fmt(rem)+'</label><input type="number" class="inp" id="payAmt" value="'+rem+'" max="'+rem+'">'+
+ '<div class="m-actions"><button class="btn btn-g" onclick="closeModal()">إلغاء</button><button class="btn btn-a" onclick="doPay(\''+s.id+'\',false)">'+ic('check',16)+' تسجيل الدفعة</button></div>');
 }
-function doPay(id){
- const amt=+(el('payAmt').value||0);
- const sales=DB.get('am_sales',[]),s=sales.find(x=>x.id===id);
- const rem=remOf(s);
- if(amt<=0){toast('أدخل مبلغًا صحيحًا','warn');return}
- if(amt>rem){toast('المبلغ أكبر من المتبقي ('+fmt(rem)+' ج.س)','warn');return}
- s.paidAmount=(s.paidAmount||0)+amt;
- const pays=DB.get('am_payments',[]);
- pays.push({id:uid(),date:new Date().toISOString(),invId:s.id,inv:s.inv,amount:amt,debtor:s.debtorName,sellerId:currentUser.id,sellerName:currentUser.name});
- if(s.paidAmount>=s.total){
-  s.debtStatus='paid';s.paidDate=new Date().toISOString();s.locked=true;
-  DB.set('am_sales',sales);DB.set('am_payments',pays);
-  closeModal();toast('تم سداد الدين بالكامل وقفل الفاتورة '+s.inv+' — تحولت لمبيعات كاش ✓','ok');
- }else{
-  DB.set('am_sales',sales);DB.set('am_payments',pays);
-  closeModal();toast('سداد جزئي: '+fmt(amt)+' ج.س — المتبقي '+fmt(remOf(s))+' ج.س','ok');
- }
- renderCurrent();
+function payFull(id){
+ const s=DB.get('am_sales',[]).find(x=>x.id===id);
+ const rem=getDebtRemaining(s);
+ confirmBox('سداد كامل المبلغ المتبقي ('+fmt(rem)+' ج.س) للفاتورة '+s.inv+'؟ ستُقفل الفاتورة نهائيًا.',()=>doPay(id,true));
+}
+function doPay(id,full){
+ const amt=+(el('payAmt')?el('payAmt').value:0);
+ const sales=DB.get('am_sales',[]),s=sales.find(x=>x.id===id);if(!s)return;
+ const rem=getDebtRemaining(s);
+ let payment=full?rem:amt;
+ if(payment<=0){toast('أدخل مبلغًا صحيحًا','warn');return}
+ if(payment>rem){toast('المبلغ أكبر من المتبقي','warn');return}
+ s.paidAmount=(s.paidAmount||0)+payment;
+ if(s.paidAmount>=s.total){s.debtStatus='paid';s.paidDate=new Date().toISOString();s.locked=true;toast('تم السداد الكامل وقفل الفاتورة '+s.inv+' ✓','ok')}
+ else{toast('تم تسجيل دفعة '+fmt(payment)+' — المتبقي '+fmt(s.total-s.paidAmount)+' ج.س','ok')}
+ const pays=DB.get('am_debt_payments',[]);
+ pays.push({id:uid(),date:new Date().toISOString(),invId:s.id,inv:s.inv,amount:payment,debtor:s.debtorName,sellerId:currentUser.id,sellerName:currentUser.name,isFull:payment>=rem||(s.paidAmount>=s.total)});
+ DB.set('am_sales',sales);DB.set('am_debt_payments',pays);
+ closeModal();renderCurrent();
 }
 
 /* ================= المرتجعات ================= */
@@ -605,11 +651,12 @@ function viewReturns(){
  '</tbody></table></div>':emptyState('undo','لا توجد مرتجعات'))+'</div>';
 }
 function viewSReturns(){
+ // المرتجع فقط للفواتير غير المقفولة (locked=false)
  const sales=DB.get('am_sales',[]).filter(s=>!s.locked).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,25);
  const sel=sales.find(s=>s.id===retInvId);
  let body='<div class="page-h"><h2>تسجيل مرتجع</h2></div><div class="card pad">'+
- '<div class="c-title">١ — اختر الفاتورة</div><div class="ret-list">'+
- (sales.length?sales.map(s=>'<button class="ret-inv'+(s.id===retInvId?' on':'')+'" onclick="pickRetInv(\''+s.id+'\')"><b style="font-family:Changa">'+s.inv+'</b><small>'+fmtDate(s.date)+' • '+fmt(s.total)+' ج.س</small></button>').join(''):'<p class="mut" style="font-size:13px">لا فواتير متاحة للمرتجع</p>')+'</div>';
+ '<div class="c-title">١ — اختر الفاتورة (غير المقفولة فقط)</div><div class="ret-list">'+
+ (sales.length?sales.map(s=>'<button class="ret-inv'+(s.id===retInvId?' on':'')+'" onclick="pickRetInv(\''+s.id+'\')"><b style="font-family:Changa">'+s.inv+'</b><small>'+fmtDate(s.date)+' • '+fmt(s.total)+' ج.س'+(s.payType==='debt'?' • دين':'')+'</small></button>').join(''):'<p class="mut" style="font-size:13px">لا فواتير متاحة للمرتجع</p>')+'</div>';
  if(sel){
   body+='<div class="div"></div><div class="c-title">٢ — اختر الأصناف والكميات</div>'+
   sel.items.map(i=>{
@@ -627,6 +674,7 @@ function retQty(pid,d,max){retPicks[pid]=Math.min(max,Math.max(0,(retPicks[pid]|
 function doReturn(){
  retReason=el('retReason')?el('retReason').value:'';
  const sales=DB.get('am_sales',[]),s=sales.find(x=>x.id===retInvId);if(!s)return;
+ if(s.locked){toast('الفاتورة مقفولة، لا يمكن المرتجع','warn');return}
  const prods=DB.get('am_products',[]),rets=DB.get('am_returns',[]);
  let count=0,totalAmt=0;
  Object.keys(retPicks).forEach(pid=>{
@@ -636,12 +684,12 @@ function doReturn(){
   const amt=qty*it.price;
   s.returned=s.returned||[];s.returned.push({pid,qty});
   s.total=Math.max(0,s.total-amt);s.subtotal=Math.max(0,s.subtotal-amt);
-  s.paidAmount=Math.min(s.paidAmount||0,s.total);
+  if(s.payType==='debt')s.paidAmount=Math.min(s.paidAmount||0,s.total);
   rets.push({id:uid(),date:new Date().toISOString(),inv:s.inv,invId:s.id,pid,name:it.name,qty,amount:amt,cost:it.cost,reason:retReason||'بدون سبب',sellerId:currentUser.id,sellerName:currentUser.name});
   count++;totalAmt+=amt;});
  if(!count){toast('حدد صنفًا واحدًا على الأقل','warn');return}
  DB.set('am_sales',sales);DB.set('am_products',prods);DB.set('am_returns',rets);
- toast('تم تسجيل المرتجع ('+count+' صنف) وخصم '+fmt(totalAmt)+' ج.س من المبيعات','ok');
+ toast('تم تسجيل المرتجع ('+count+' صنف) وخصم '+fmt(totalAmt)+' ج.س','ok');
  retInvId=null;retPicks={};retReason='';renderCurrent();
 }
 
@@ -657,7 +705,7 @@ function viewUsers(){
  '<div class="card" style="margin-top:12px">'+(sellers.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة المرور</th><th></th></tr></thead><tbody>'+
  sellers.map(u=>'<tr><td><b>'+esc(u.name)+'</b></td><td dir="ltr">'+esc(u.username)+'</td><td dir="ltr" class="mut">'+esc(u.password)+'</td>'+
  '<td class="row-a"><button class="icobtn danger" onclick="delUser(\''+u.id+'\')">'+ic('trash',16)+'</button></td></tr>').join('')+
- '</tbody></table></div>':emptyState('users','لا يوجد بائعون — أنشئ حسابًا من الأعلى'))+'</div>';
+ '</tbody></table></div>':emptyState('users','لا يوجد بائعون'))+'</div>';
 }
 function addSeller(){
  const name=el('nu-name').value.trim(),username=el('nu-user').value.trim(),password=el('nu-pass').value;
@@ -670,18 +718,162 @@ function addSeller(){
 function delUser(id){confirmBox('حذف حساب هذا البائع؟',()=>{DB.set('am_users',DB.get('am_users',[]).filter(u=>u.id!==id));toast('تم الحذف','ok');renderCurrent()})}
 function viewSettings(){
  const st=DB.get('am_settings',{});
- el('main').innerHTML='<div class="page-h"><h2>الإعدادات</h2></div><div class="card pad">'+
+ el('main').innerHTML='<div class="page-h"><h2>الإعدادات</h2></div>'+
+ '<div class="card pad"><div class="c-title">'+ic('gear',16)+' إعدادات المحل</div>'+
  '<label class="lbl">اسم المحل</label><input class="inp" id="st-name" value="'+esc(st.shopName||'')+'">'+
  '<label class="lbl">رقم الهاتف</label><input class="inp" id="st-phone" dir="ltr" value="'+esc(st.phone||'')+'">'+
  '<label class="lbl">رقم الواتساب (مع رمز الدولة)</label><input class="inp" id="st-wa" dir="ltr" value="'+esc(st.whatsapp||'')+'" placeholder="249xxxxxxxxx">'+
- '<button class="btn btn-p btn-block" style="margin-top:14px" onclick="saveSettings()">'+ic('check',16)+' حفظ الإعدادات</button>'+
- '<div class="div"></div><button class="btn btn-d btn-block" onclick="resetAll()">'+ic('trash',16)+' إعادة ضبط المصنع (مسح كل البيانات)</button></div>';
+ '<button class="btn btn-p btn-block" style="margin-top:14px" onclick="saveSettings()">'+ic('check',16)+' حفظ الإعدادات</button></div>'+
+ '<div class="card pad" style="margin-top:12px"><div class="c-title">'+ic('book',16)+' الإدارة اليومية</div>'+
+ '<div class="g2">'+
+ '<button class="btn btn-a btn-block" onclick="go(\'closing\')">'+ic('lock',16)+' قفل يوم العمل</button>'+
+ '<button class="btn btn-p btn-block" onclick="go(\'loginLogs\')">'+ic('users',16)+' سجل الدخول</button>'+
+ '</div></div>'+
+ '<div class="card pad" style="margin-top:12px"><div class="c-title">'+ic('down',16)+' النسخ الاحتياطي</div>'+
+ '<div class="g2">'+
+ '<button class="btn btn-p btn-block" onclick="exportBackup()">'+ic('down',16)+' تصدير نسخة احتياطية</button>'+
+ '<button class="btn btn-a btn-block" onclick="document.getElementById(\'importFile\').click()">'+ic('up',16)+' استيراد من ملف</button>'+
+ '</div>'+
+ '<p class="mut" style="font-size:12px;margin-top:10px">💡 للتخزين على Google Drive: بعد التصدير، ارفع ملف JSON الناتج إلى Google Drive يدوياً. للاستيراد، حمّل الملف من Drive ثم استخدم زر "استيراد".</p></div>'+
+ '<div class="card pad" style="margin-top:12px;border-color:#f4b8ad"><div class="c-title" style="color:#bb3a22">'+ic('alert',16)+' منطقة الخطر</div>'+
+ '<button class="btn btn-d btn-block" onclick="resetAll()">'+ic('trash',16)+' إعادة ضبط المصنع (مسح كل البيانات)</button></div>';
 }
 function saveSettings(){
  DB.set('am_settings',{shopName:el('st-name').value.trim(),phone:el('st-phone').value.trim(),whatsapp:el('st-wa').value.trim()});
  toast('تم حفظ الإعدادات ✓','ok');enterApp(currentUser);
 }
-function resetAll(){confirmBox('سيتم مسح كل البيانات (منتجات، مبيعات، مستخدمين) وإعادة النظام لحالة المصنع. متأكد؟',()=>{Object.keys(localStorage).filter(k=>k.startsWith('am_')).forEach(k=>localStorage.removeItem(k));location.reload()})}
+function resetAll(){confirmBox('سيتم مسح كل البيانات. متأكد؟',()=>{Object.keys(localStorage).filter(k=>k.startsWith('am_')).forEach(k=>localStorage.removeItem(k));location.reload()})}
+
+/* ================= تصدير واستيراد البيانات ================= */
+function exportBackup(){
+ const data={
+  version:'2.0',
+  exportedAt:new Date().toISOString(),
+  exportedBy:currentUser?currentUser.name:'نظام',
+  products:DB.get('am_products',[]),
+  users:DB.get('am_users',[]),
+  sales:DB.get('am_sales',[]),
+  returns:DB.get('am_returns',[]),
+  payments:DB.get('am_payments',[]),
+  debt_payments:DB.get('am_debt_payments',[]),
+  settings:DB.get('am_settings',{}),
+  notifs:DB.get('am_notifs',[]),
+  logins:DB.get('am_logins',[]),
+  day_closures:DB.get('am_day_closures',[]),
+  seq:DB.get('am_seq',0)
+ };
+ const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement('a');
+ a.href=url;a.download='backup-am-'+new Date().toISOString().slice(0,10)+'.json';
+ document.body.appendChild(a);a.click();a.remove();
+ URL.revokeObjectURL(url);
+ toast('تم تنزيل النسخة الاحتياطية ✓ — ارفعها على Google Drive للحفظ','ok');
+}
+el('importFile').addEventListener('change',e=>{
+ const file=e.target.files[0];if(!file)return;
+ const r=new FileReader();
+ r.onload=ev=>{
+  try{
+   const data=JSON.parse(ev.target.result);
+   if(!data.version||!data.products)throw new Error('ملف غير صحيح');
+   confirmBox('سيتم استبدال كل البيانات الحالية ببيانات الملف '+file.name+'. متأكد؟',()=>{
+    DB.set('am_products',data.products||[]);
+    DB.set('am_users',data.users||[]);
+    DB.set('am_sales',data.sales||[]);
+    DB.set('am_returns',data.returns||[]);
+    DB.set('am_payments',data.payments||[]);
+    DB.set('am_debt_payments',data.debt_payments||[]);
+    DB.set('am_settings',data.settings||{});
+    DB.set('am_notifs',data.notifs||[]);
+    DB.set('am_logins',data.logins||[]);
+    DB.set('am_day_closures',data.day_closures||[]);
+    DB.set('am_seq',data.seq||0);
+    DB.set('am_seeded_v2',1);
+    toast('تم استيراد البيانات بنجاح ✓','ok');
+    enterApp(currentUser);
+   });
+  }catch(err){toast('ملف غير صالح: '+err.message,'err')}
+ };
+ r.readAsText(file);
+ e.target.value='';
+});
+
+/* ================= قفل يوم العمل ================= */
+function viewClosing(){
+ const sales=DB.get('am_sales',[]),rets=DB.get('am_returns',[]),debts=DB.get('am_debt_payments',[]),closes=DB.get('am_day_closures',[]).slice(0,7);
+ const today=new Date();
+ const todaySales=sales.filter(s=>isSameDay(new Date(s.date),today));
+ const todayRets=rets.filter(r=>isSameDay(new Date(r.date),today));
+ const todayDebtPays=debts.filter(p=>isSameDay(new Date(p.date),today));
+ const cashToday=todaySales.filter(s=>s.payType==='cash').reduce((s,x)=>s+x.total,0);
+ const debtToday=todaySales.filter(s=>s.payType==='debt').reduce((s,x)=>s+x.total,0);
+ const debtPaidToday=todayDebtPays.reduce((s,x)=>s+x.amount,0);
+ const retTotal=todayRets.reduce((s,x)=>s+x.amount,0);
+ const netToday=cashToday+debtPaidToday-retTotal;
+ const profit=todaySales.reduce((s,x)=>s+x.items.reduce((a,i)=>a+(i.price-i.cost)*i.qty,0),0);
+ const lastClose=closes[0];
+ el('main').innerHTML='<div class="page-h"><h2>قفل يوم العمل</h2></div>'+
+ '<div class="kpis">'+
+ '<div class="kpi k-ok"><span class="k-lbl">مبيعات كاش اليوم</span><span class="num">'+fmt(cashToday)+'</span><small>ج.س</small></div>'+
+ '<div class="kpi k-warn"><span class="k-lbl">مبيعات دين جديدة</span><span class="num">'+fmt(debtToday)+'</span><small>ج.س</small></div>'+
+ '<div class="kpi k-p"><span class="k-lbl">تحصيلات ديون</span><span class="num">'+fmt(debtPaidToday)+'</span><small>ج.س</small></div>'+
+ '<div class="kpi k-bad"><span class="k-lbl">المرتجعات</span><span class="num">'+fmt(retTotal)+'</span><small>ج.س</small></div></div>'+
+ '<div class="card pad" style="margin-top:12px"><div class="c-title">'+ic('wallet',16)+' صافي الصندوق المتوقع</div>'+
+ '<div class="tr-line big"><span>المبلغ المتوقع في الصندوق</span><b class="txt-p">'+fmt(netToday)+' ج.س</b></div>'+
+ '<div class="tr-line"><span>أرباح اليوم</span><b class="txt-ok" style="color:#177a44">'+fmt(profit)+' ج.س</b></div>'+
+ '<div class="tr-line"><span>عدد الفواتير</span><b>'+todaySales.length+'</b></div>'+
+ '<div class="tr-line"><span>عدد المرتجعات</span><b>'+todayRets.length+'</b></div>'+
+ '<div class="div"></div>'+
+ '<label class="lbl">مبلغ الصندوق الفعلي (للتدقيق)</label><input type="number" class="inp" id="actualCash" placeholder="أدخل المبلغ الفعلي">'+
+ '<label class="lbl">ملاحظات (اختياري)</label><textarea class="inp" id="closeNote" rows="2" placeholder="أي ملاحظات على اليوم..."></textarea>'+
+ '<button class="btn btn-a btn-block big" style="margin-top:14px" onclick="doClose()">'+ic('lock',18)+' قفل اليوم</button></div>'+
+ (closes.length?'<div class="card" style="margin-top:12px"><div class="c-title">آخر أيام مقفولة</div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>التاريخ</th><th>المبلغ المتوقع</th><th>الفعلي</th><th>الفرق</th><th>المسؤول</th></tr></thead><tbody>'+
+ closes.map(c=>'<tr><td>'+fmtDate(c.date)+'</td><td>'+fmt(c.expected)+'</td><td>'+fmt(c.actual)+'</td><td class="'+(c.actual===c.expected?'txt-p':c.actual<c.expected?'txt-d':'txt-p')+'">'+(c.actual-c.expected>=0?'+':'')+fmt(c.actual-c.expected)+'</td><td>'+esc(c.closedBy)+'</td></tr>').join('')+'</tbody></table></div></div>':'');
+}
+function doClose(){
+ if(currentUser.role!=='admin'){
+  modal('<h3 class="m-title">'+ic('lock',19)+' تأكيد بكلمة مرور المدير</h3>'+
+  '<label class="lbl">كلمة مرور المدير</label><input class="inp" id="admPassConfirm" type="password" dir="ltr">'+
+  '<div class="m-actions"><button class="btn btn-g" onclick="closeModal()">إلغاء</button><button class="btn btn-p" onclick="checkClosePwd()">تأكيد</button></div>');
+ }else{
+  finalizeClose();
+ }
+}
+function checkClosePwd(){
+ const pwd=el('admPassConfirm').value;
+ const users=DB.get('am_users',[]);
+ const admin=users.find(u=>u.role==='admin');
+ if(!admin||admin.password!==pwd){toast('كلمة المرور غير صحيحة','warn');return}
+ closeModal();finalizeClose();
+}
+function finalizeClose(){
+ const sales=DB.get('am_sales',[]),rets=DB.get('am_returns',[]),debts=DB.get('am_debt_payments',[]);
+ const today=new Date();
+ const todaySales=sales.filter(s=>isSameDay(new Date(s.date),today));
+ const todayRets=rets.filter(r=>isSameDay(new Date(r.date),today));
+ const todayDebtPays=debts.filter(p=>isSameDay(new Date(p.date),today));
+ const cashToday=todaySales.filter(s=>s.payType==='cash').reduce((s,x)=>s+x.total,0);
+ const debtPaidToday=todayDebtPays.reduce((s,x)=>s+x.amount,0);
+ const retTotal=todayRets.reduce((s,x)=>s+x.amount,0);
+ const expected=cashToday+debtPaidToday-retTotal;
+ const actual=+(el('actualCash').value||expected);
+ const note=el('closeNote').value.trim();
+ const closes=DB.get('am_day_closures',[]);
+ closes.unshift({id:uid(),date:today.toISOString(),expected,actual,diff:actual-expected,closedBy:currentUser.name,note,invoices:todaySales.length});
+ DB.set('am_day_closures',closes.slice(0,60));
+ toast('تم قفل يوم '+fmtDate(today.toISOString())+' ✓','ok');
+ renderCurrent();
+}
+
+/* ================= سجل الدخول ================= */
+function viewLoginLogs(){
+ const logs=DB.get('am_logins',[]);
+ el('main').innerHTML='<div class="page-h"><h2>سجل الدخول</h2><span class="cnt">'+logs.length+'</span></div>'+
+ '<div class="card">'+(logs.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>التاريخ</th><th>الوقت</th><th>المستخدم</th><th>العملية</th></tr></thead><tbody>'+
+ logs.map(l=>'<tr><td>'+fmtDate(l.date)+'</td><td>'+fmtTime(l.date)+'</td><td><b>'+esc(l.userName)+'</b></td><td>'+(l.action==='login'?'<span class="bdg ok">تسجيل دخول</span>':'<span class="bdg warn">تسجيل خروج</span>')+'</td></tr>').join('')+
+ '</tbody></table></div>':emptyState('users','لا سجل دخول بعد'))+'</div>';
+}
 
 /* ================= نقطة البيع ================= */
 function viewPOS(){
@@ -698,7 +890,7 @@ function renderPosGrid(){
   return '<div class="pcard'+(sel?' sel':'')+(out?' out':'')+'" onclick="togglePick(\''+p.id+'\')">'+
   '<span class="pc-name">'+esc(p.name)+'</span>'+(sel?'<span class="chk">'+ic('check',13)+'</span>':'')+
   '<div class="pc-price">'+fmt(p.sell)+' <small>ج.س</small></div>'+
-  '<div class="pc-foot"><span class="bdg '+(p.stock<=5?'bad':p.stock<=10?'warn':'ok')+'">المخزون '+p.stock+'</span>'+
+  '<div class="pc-foot"><span class="bdg '+(p.stock<=(p.minStock||5)?'bad':p.stock<=(p.minStock||5)*2?'warn':'ok')+'">المخزون '+p.stock+'</span>'+
   (sel?'<div class="qty" onclick="event.stopPropagation()"><button onclick="chQty(\''+p.id+'\',-1)">−</button><b>'+sel+'</b><button onclick="chQty(\''+p.id+'\',1)">+</button></div>':'')+
   '</div></div>'}).join('');
  const n=Object.values(cart).reduce((a,b)=>a+b,0);
@@ -725,10 +917,13 @@ function viewInvoice(){
  const prods=DB.get('am_products',[]);
  invItems=Object.keys(cart).map(id=>{const p=prods.find(x=>x.id===id);return p?{pid:p.id,name:p.name,price:p.sell,cost:p.buy,qty:cart[id],max:p.stock}:null}).filter(Boolean);
  if(!invItems.length){viewPOS();return}
- invPay='cash';
+ invPay='cash';invDiscMode='fixed';
  el('main').innerHTML='<div class="page-h"><button class="icobtn" onclick="viewPOS()">'+ic('back',18)+'</button><h2 style="font-size:19px">فاتورة جديدة</h2><span class="bdg info" style="font-family:Changa;font-size:13px">'+nextInvNo()+'</span></div>'+
  '<div class="card pad"><div id="invRows"></div><div class="div"></div>'+
- '<label class="lbl">الخصم (ج.س)</label><input type="number" min="0" class="inp" id="invDisc" value="0" oninput="drawInvTotals()">'+
+ '<label class="lbl">نوع الخصم</label>'+
+ '<div class="seg"><button id="segFixed" class="on" onclick="setDiscMode(\'fixed\')">مبلغ ثابت</button><button id="segPct" onclick="setDiscMode(\'pct\')">نسبة %</button></div>'+
+ '<div class="g2"><div><label class="lbl">قيمة الخصم</label><input type="number" min="0" class="inp" id="invDisc" value="0" oninput="drawInvTotals()"></div>'+
+ '<div><label class="lbl">المبلغ بعد الخصم</label><input type="number" class="inp calc" id="invDiscResult" readonly></div></div>'+
  '<label class="lbl" style="margin-top:14px">نوع الدفع</label>'+
  '<div class="seg"><button id="segCash" class="on" onclick="setInvPay(\'cash\')">'+ic('cash',16)+' كاش</button><button id="segDebt" onclick="setInvPay(\'debt\')">دين (آجل)</button></div>'+
  '<div id="debtBox" class="hidden"><label class="lbl">اسم المدين *</label><input class="inp" id="debtorName" placeholder="اسم العميل المدين">'+
@@ -737,6 +932,10 @@ function viewInvoice(){
  '<div class="div"></div><div id="invTotals"></div>'+
  '<button class="btn btn-a btn-block big" style="margin-top:14px" onclick="confirmSale()">'+ic('check',18)+' تأكيد وحفظ الفاتورة</button></div>';
  drawInvRows();
+}
+function setDiscMode(m){invDiscMode=m;
+ el('segFixed').classList.toggle('on',m==='fixed');el('segPct').classList.toggle('on',m==='pct');
+ drawInvTotals();
 }
 function drawInvRows(){
  el('invRows').innerHTML=invItems.map((i,ix)=>'<div class="inv-row">'+
@@ -750,12 +949,14 @@ function invQty(ix,d){const i=invItems[ix];i.qty=Math.min(i.max,Math.max(1,i.qty
 function invDel(ix){invItems.splice(ix,1);if(!invItems.length){cart={};viewPOS();return}drawInvRows()}
 function invTotalsObj(){
  const sub=invItems.reduce((s,i)=>s+i.price*i.qty,0);
- const disc=Math.min(+(el('invDisc')?el('invDisc').value:0)||0,sub);
+ const discVal=+(el('invDisc')?el('invDisc').value:0)||0;
+ let disc=invDiscMode==='pct'?Math.min(sub,Math.round(sub*discVal/100)):Math.min(discVal,sub);
+ if(el('invDiscResult'))el('invDiscResult').value=disc;
  return{sub,disc,net:sub-disc};
 }
 function drawInvTotals(){const t=invTotalsObj();
  el('invTotals').innerHTML='<div class="tr-line"><span>الإجمالي</span><b>'+fmt(t.sub)+' ج.س</b></div>'+
- '<div class="tr-line"><span>الخصم</span><b class="txt-d">− '+fmt(t.disc)+' ج.س</b></div>'+
+ '<div class="tr-line"><span>الخصم'+(invDiscMode==='pct'?' ('+(el('invDisc').value||0)+'%)':'')+'</span><b class="txt-d">− '+fmt(t.disc)+' ج.س</b></div>'+
  '<div class="tr-line big"><span>الصافي</span><b>'+fmt(t.net)+' ج.س</b></div>'}
 function setInvPay(p){invPay=p;
  el('segCash').classList.toggle('on',p==='cash');el('segDebt').classList.toggle('on',p==='debt');
@@ -770,7 +971,8 @@ function confirmSale(){
   debtorName:invPay==='debt'?el('debtorName').value.trim():'',
   debtorPhone:(el('debtorPhone')?el('debtorPhone').value.trim():''),
   custPhone:(el('custPhone')?el('custPhone').value.trim():''),
-  debtStatus:invPay==='debt'?'unpaid':'',paidAmount:0,paidDate:'',locked:false,returned:[]};
+  paidAmount:0,
+  debtStatus:invPay==='debt'?'unpaid':'',paidDate:'',locked:false,returned:[]};
  invItems.forEach(i=>{const p=prods.find(x=>x.id===i.pid);if(p)p.stock=Math.max(0,p.stock-i.qty)});
  sales.push(sale);
  DB.set('am_sales',sales);DB.set('am_products',prods);DB.set('am_seq',DB.get('am_seq',0)+1);
@@ -782,16 +984,29 @@ function showSuccess(s){
  el('main').innerHTML='<div class="card success"><div class="ok-ring">'+ic('check',34)+'</div>'+
  '<h2 class="s-title">تم حفظ الفاتورة بنجاح</h2><div class="s-inv">'+s.inv+'</div>'+
  '<div class="s-meta">'+fmtDate(s.date)+' • '+fmtTime(s.date)+' • الصافي <b>'+fmt(s.total)+' ج.س</b></div>'+
- '<div class="s-actions"><button class="btn btn-p btn-block big" onclick="printInv(\''+s.id+'\')">'+ic('print',18)+' طباعة الفاتورة (80mm)</button>'+
+ '<div class="s-actions"><button class="btn btn-p btn-block big" onclick="printInv(\''+s.id+'\',\'receipt\')">'+ic('print',18)+' طباعة 80mm</button>'+
+ '<button class="btn btn-a btn-block big" onclick="printInv(\''+s.id+'\',\'a4\')">'+ic('print',18)+' طباعة A4</button>'+
  '<button class="btn btn-wa btn-block big" onclick="waInv(\''+s.id+'\')">'+icWA(18)+' إرسال للزبون واتساب</button>'+
  '<button class="btn btn-g btn-block" onclick="go(\'pos\')">فاتورة جديدة</button></div></div>';
 }
+function viewMySales(){
+ const sales=DB.get('am_sales',[]).filter(s=>s.sellerId===currentUser.id).sort((a,b)=>b.date.localeCompare(a.date));
+ el('main').innerHTML='<div class="page-h"><h2>مبيعاتي</h2><span class="cnt">'+sales.length+'</span></div>'+
+ '<div class="card">'+(sales.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>الفاتورة</th><th>التاريخ</th><th>الصنف</th><th>الإجمالي</th><th>النوع</th><th></th></tr></thead><tbody>'+
+ sales.map(s=>'<tr><td style="font-family:Changa">'+s.inv+'</td><td>'+fmtDate(s.date)+'</td><td>'+s.items.reduce((a,i)=>a+i.qty,0)+' قطعة</td><td><b>'+fmt(s.total)+'</b></td><td>'+payBadge(s)+'</td>'+
+ '<td class="row-a"><button class="icobtn" onclick="printInv(\''+s.id+'\',\'receipt\')">'+ic('print',15)+'</button></td></tr>').join('')+
+ '</tbody></table></div>':emptyState('chart','لا مبيعات لك بعد'))+'</div>';
+}
 
 /* ================= طباعة + واتساب ================= */
-function printInv(id){
+function printInv(id,format='receipt'){
  const s=DB.get('am_sales',[]).find(x=>x.id===id);if(!s)return;
  const st=DB.get('am_settings',{});
- el('print-area').innerHTML='<div class="rc"><div style="color:#000;display:flex;justify-content:center">'+ic('gear',28)+'</div>'+
+ const pa=el('print-area');
+ pa.className=format;
+ const rem=s.payType==='debt'?getDebtRemaining(s):0;
+ const paid=s.paidAmount||0;
+ pa.innerHTML='<div class="rc"><div style="color:#000;display:flex;justify-content:center">'+ic('gear',format==='a4'?40:28)+'</div>'+
  '<div class="rc-name">'+esc(st.shopName||'اسبيرات أبو مصطفى')+'</div>'+
  '<div>هاتف: '+esc(st.phone||'')+'</div><div class="rc-sep"></div>'+
  '<div class="rc-lr"><span>رقم الفاتورة</span><b>'+s.inv+'</b></div>'+
@@ -801,54 +1016,28 @@ function printInv(id){
  '<div class="rc-sep"></div><table class="rc-tbl"><tr><th>الصنف</th><th>كمية</th><th>سعر</th><th>المبلغ</th></tr>'+
  s.items.map(i=>'<tr><td>'+esc(i.name)+'</td><td>'+i.qty+'</td><td>'+fmt(i.price)+'</td><td>'+fmt(i.price*i.qty)+'</td></tr>').join('')+'</table>'+
  '<div class="rc-sep"></div><div class="rc-lr"><span>الإجمالي</span><b>'+fmt(s.subtotal)+' ج.س</b></div>'+
- (s.discount?'<div class="rc-lr"><span>الخصم</span><b>'+fmt(s.discount)+' ج.س</b></div>':'')+
+ (s.discount?'<div class="rc-lr"><span>الخصم</span><b>−'+fmt(s.discount)+' ج.س</b></div>':'')+
  '<div class="rc-lr rc-net"><span>الصافي</span><b>'+fmt(s.total)+' ج.س</b></div>'+
- '<div class="rc-lr"><span>طريقة الدفع</span><b>'+(s.payType==='cash'?'كاش':'دين — '+(s.debtStatus==='paid'?'مدفوع':((s.paidAmount||0)>0?'مدفوع جزئيًا':'غير مدفوع')))+'</b></div>'+
- (s.payType==='debt'?'<div class="rc-lr"><span>المدفوع</span><b>'+fmt(s.paidAmount||0)+' ج.س</b></div><div class="rc-lr"><span>المتبقي</span><b>'+fmt(remOf(s))+' ج.س</b></div>':'')+
+ (s.payType==='debt'?'<div class="rc-lr"><span>المدفوع</span><b>'+fmt(paid)+' ج.س</b></div><div class="rc-lr"><span>المتبقي</span><b>'+fmt(rem)+' ج.س</b></div>':'')+
+ '<div class="rc-lr"><span>طريقة الدفع</span><b>'+(s.payType==='cash'?'كاش':(rem<=0?'دين (مدفوع بالكامل)':'دين (آجل)'))+'</b></div>'+
  '<div class="rc-sep"></div><div style="font-weight:700">شكراً لتعاملكم معنا</div></div>';
- toast('اختر طابعة البلوتوث الحرارية من نافذة الطباعة','ok');
+ toast(format==='a4'?'سيتم الطباعة على ورقة A4':'اختر طابعة البلوتوث الحرارية','ok');
  setTimeout(()=>window.print(),300);
 }
 function waInv(id){
  const s=DB.get('am_sales',[]).find(x=>x.id===id);if(!s)return;
  const st=DB.get('am_settings',{});
- const prodsTxt=s.items.map(i=>i.name+' '+i.qty).join(', ');
- let msg='فاتورة من '+(st.shopName||'اسبيرات ابو مصطفى')+'\nرقم الفاتورة: '+s.inv+'\nالتاريخ: '+fmtDate(s.date)+'\nالمنتجات: '+prodsTxt+'\nالاجمالي: '+fmt(s.total)+' SDG';
- if(s.payType==='debt'&&s.debtStatus!=='paid')msg+='\nالمتبقي (دين): '+fmt(remOf(s))+' SDG';
- msg+='\nشكرا لتعاملكم معنا';
+ const prodsTxt=s.items.map(i=>i.name+' ('+i.qty+')').join(', ');
+ const rem=getDebtRemaining(s);
+ const msg='فاتورة من '+(st.shopName||'اسبيرات ابو مصطفى')+'\nرقم الفاتورة: '+s.inv+'\nالتاريخ: '+fmtDate(s.date)+'\nالمنتجات: '+prodsTxt+'\nالاجمالي: '+fmt(s.total)+' SDG'+(s.payType==='debt'?' (المتبقي: '+fmt(rem)+' SDG)':'')+'\nشكرا لتعاملكم معنا';
  let phone=(s.debtorPhone||s.custPhone||'').replace(/\D/g,'');
  if(phone.startsWith('0'))phone='249'+phone.slice(1);
- window.open((phone?'https://wa.me/'+phone+'?text=':'https://wa.me/?text=')+encodeURIComponent(msg),'_blank');
+ window.open((phone?'https://wa.me/'+phone+'?text='+encodeURIComponent(msg):'https://wa.me/?text='+encodeURIComponent(msg)),'_blank');
 }
 
-/* ================= مبيعاتي ================= */
-function viewMySales(){
- const sales=DB.get('am_sales',[]).filter(s=>s.sellerId===currentUser.id);
- const rets=DB.get('am_returns',[]).filter(r=>r.sellerId===currentUser.id);
- const now=new Date(),wk=startOfWeek(now);
- const tS=sales.filter(s=>isSameDay(new Date(s.date),now));
- const wS=sales.filter(s=>new Date(s.date)>=wk);
- const tR=rets.filter(r=>isSameDay(new Date(r.date),now)).reduce((s,x)=>s+x.amount,0);
- const list=tS.slice().sort((a,b)=>b.date.localeCompare(a.date));
- el('main').innerHTML='<div class="page-h"><h2>مبيعاتي</h2></div>'+
- '<div class="kpis"><div class="kpi k-a"><span class="k-lbl">مبيعات اليوم</span><span class="num">'+fmt(tS.reduce((s,x)=>s+x.total,0)-tR)+'</span><small>ج.س • '+tS.length+' فاتورة</small></div>'+
- '<div class="kpi k-p"><span class="k-lbl">مبيعات الأسبوع</span><span class="num">'+fmt(wS.reduce((s,x)=>s+x.total,0))+'</span><small>ج.س • '+wS.length+' فاتورة</small></div></div>'+
- '<div class="card" style="margin-top:12px"><div style="padding:14px 14px 0"><div class="c-title">فواتير اليوم</div></div>'+
- (list.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>الفاتورة</th><th>الوقت</th><th>الأصناف</th><th>الدفع</th><th>الصافي</th></tr></thead><tbody>'+
- list.map(s=>'<tr><td style="font-family:Changa">'+s.inv+'</td><td>'+fmtTime(s.date)+'</td><td>'+s.items.reduce((a,i)=>a+i.qty,0)+'</td><td>'+payBadge(s)+'</td><td><b>'+fmt(s.total)+'</b></td></tr>').join('')+
- '</tbody></table></div>':emptyState('cart','لا مبيعات اليوم بعد — افتح نقطة البيع'))+'</div>';
-}
-
-/* ================= تشغيل ================= */
-window.addEventListener('load',function(){
- seed();renderLogin();
- const ses=DB.get('am_session',null);
- if(ses){const u=DB.get('am_users',[]).find(x=>x.id===ses.uid);if(u){enterApp(u);return}}
-});
-window.addEventListener('storage',function(e){
- if(e.key&&e.key.indexOf('am_')===0&&currentUser){updateBell();if(['dashboard','debts'].indexOf(currentView)>=0)renderCurrent()}
-});
-setInterval(function(){if(currentUser&&currentUser.role==='admin'&&currentView==='dashboard')viewDashboard()},20000);
+/* ================= التشغيل ================= */
+seed();
+renderLogin();
 </script>
 </body>
 </html>
